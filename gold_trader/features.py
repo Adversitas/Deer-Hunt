@@ -16,7 +16,7 @@ def build_features(close, macro=None, horizons=(1, 5, 10, 20, 60), vol_window=20
     """Return (features, target, forward_return).
 
     `macro` is an optional DataFrame already aligned to `close.index` (see
-    data.align_macro) with `real_rate` and/or `dollar` columns.
+    data.align_macro) with any of `real_rate`, `dollar`, `etf_holdings` columns.
 
     target[t] is 1 when the close rises from t to t+1, else 0. forward_return[t]
     is that log return; both are NaN on the last bar.
@@ -71,4 +71,17 @@ def _macro_features(macro, gold_ret, horizons=(5, 20, 60)):
         feats["dollar_dist_ma_50"] = log_usd - log_usd.rolling(50).mean()
         # How tightly gold has been trading against the dollar lately.
         feats["gold_dollar_corr_60"] = gold_ret.rolling(60).corr(log_usd.diff())
+    if "etf_holdings" in macro:
+        # ETF flows: investors adding or redeeming physical gold, as % of holdings.
+        log_hold = np.log(macro["etf_holdings"])
+        for h in horizons:
+            feats[f"etf_flow_{h}"] = log_hold.diff(h)
+        flow_20 = log_hold.diff(20)
+        feats["etf_flow_20_z"] = (flow_20 - flow_20.rolling(250, min_periods=60).mean()) / (
+            flow_20.rolling(250, min_periods=60).std()
+        )
+        # Below the 1-year peak = holdings have been drained (persistent outflows).
+        feats["etf_from_peak_250"] = log_hold - log_hold.rolling(250, min_periods=60).max()
+        # Flows against the price move (buying the dip / selling the rally).
+        feats["etf_flow_vs_price_20"] = flow_20 - gold_ret.rolling(20).sum()
     return feats

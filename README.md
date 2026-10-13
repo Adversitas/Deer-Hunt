@@ -81,7 +81,8 @@ A walk-forward model that predicts whether gold closes higher on the next bar an
 - **Macro features** (downloaded from FRED by default, no API key needed):
   - **Real rates:** the 10-year TIPS yield (`DFII10`): its level, its change over 5/20/60 bars, and how far it sits from its 1-year average. Gold pays no yield, so higher real rates make holding it more costly.
   - **Dollar index:** the broad trade-weighted dollar (`DTWEXBGS`): its momentum over 5/20/60 bars, its distance from the 50-day average, and gold's 60-day correlation with it.
-  - Macro data is shifted one bar later by default (`--macro-lag`), because FRED often publishes values a day or more after the date they cover. The broad dollar index starts in 2006, so tests that use it begin later.
+  - **Gold ETF flows:** daily tonnes of gold held by SPDR Gold Shares (GLD), the largest gold ETF, from its published history file. The model uses the % change in holdings over 5/20/60 bars (inflows or outflows), how unusual the last 20 days of flows are against the past year, how far holdings sit below their 1-year peak, and flows minus gold's own 20-day return (investors buying dips or selling rallies).
+  - Macro and ETF data are shifted one bar later by default (`--macro-lag`), because FRED often publishes values a day or more after the date they cover. The broad dollar index starts in 2006, so tests that use it begin later.
 - **Model:** L2-regularised logistic regression (numpy). It is refit every `retrain_every` bars using only data known at that point, so no future data leaks into a decision (this is checked in a test).
 - **Trading rule:** go long when P(up) > 0.5 + `band`. Short positions are optional (`--allow-short`). Position size is scaled to a 15% annual volatility target, capped at 1x, with 2 bps charged per unit of turnover.
 - **Output:** strategy metrics next to buy-and-hold for the same period, plus today's signal.
@@ -90,10 +91,11 @@ A walk-forward model that predicts whether gold closes higher on the next bar an
 pip install pandas numpy yfinance matplotlib
 python -m gold_trader                          # daily GC=F gold futures from Yahoo since 2005
 python -m gold_trader --csv my_gold.csv        # any CSV with a date and a close/price column
-python -m gold_trader --macro-csv macro.csv    # your own date, real_rate, dollar columns instead of FRED
-python -m gold_trader --macro none             # gold price features only
+python -m gold_trader --macro-csv macro.csv    # your own date, real_rate, dollar (and optionally etf_holdings) columns
+python -m gold_trader --etf-csv gld.csv        # your own ETF holdings file instead of downloading GLD's
+python -m gold_trader --macro none --etf none  # gold price features only
 python -m gold_trader --allow-short --band 0.03 --plot equity.png --out results.csv
 python -m unittest discover gold_trader/tests  # run the tests
 ```
 
-Treat the results with skepticism. In a monthly test without macro features on gold prices from 1998 to 2026, the model returned 5.6% a year (Sharpe ratio 0.63, worst drawdown −27%). Simply holding gold returned 10.2% a year (Sharpe 0.80, worst drawdown −39%). The model's smaller drawdown comes from staying out of the market about 60% of the time. That is risk reduction, not proof that the model can predict gold prices. This is a research tool, not financial advice.
+Treat the results with skepticism. In a monthly test without macro or ETF features on gold prices from 1998 to 2026, the model returned 5.6% a year (Sharpe ratio 0.63, worst drawdown −27%). Simply holding gold returned 10.2% a year (Sharpe 0.80, worst drawdown −39%). The model's smaller drawdown comes from staying out of the market about 60% of the time. That is risk reduction, not proof that the model can predict gold prices. This is a research tool, not financial advice.

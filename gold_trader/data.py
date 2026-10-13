@@ -63,14 +63,61 @@ def download_macro(start=None):
     return pd.DataFrame({name: download_fred(sid, start) for name, sid in FRED_SERIES.items()})
 
 
+# Daily history of SPDR Gold Shares (GLD), the largest gold ETF, incl. tonnes held.
+GLD_ARCHIVE_URL = "https://www.spdrgoldshares.com/assets/dynamic/GLD/GLD_US_archive_EN.csv"
+MACRO_COLUMNS = (*FRED_SERIES, "etf_holdings")
+
+
+def load_etf_holdings(path_or_url=GLD_ARCHIVE_URL):
+    """Gold held by an ETF (tonnes) as a date-indexed Series named `etf_holdings`.
+
+    Works with the SPDR GLD archive (disclaimer lines above the header, a
+    "Total NAV Tonnes in the Trust" column, "HOLIDAY" rows) and with any simple
+    CSV that has a date column and a column whose name contains "tonnes",
+    "holdings" or "ounces".
+    """
+    import io
+    import urllib.request
+
+    if str(path_or_url).startswith("http"):
+        req = urllib.request.Request(path_or_url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            text = resp.read().decode("utf-8", errors="replace")
+    else:
+        with open(path_or_url, encoding="utf-8", errors="replace") as f:
+            text = f.read()
+
+    lines = text.splitlines()
+    header = next(
+        (i for i, line in enumerate(lines) if line.lower().lstrip('" ').startswith("date")), None
+    )
+    if header is None:
+        raise ValueError(f"No header row starting with 'Date' in {path_or_url}")
+    df = pd.read_csv(io.StringIO("\n".join(lines[header:])), skipinitialspace=True)
+    df.columns = [str(c).strip() for c in df.columns]
+
+    def find(word):
+        return next((c for c in df.columns if word in c.lower()), None)
+
+    col = find("tonnes") or find("holdings") or find("ounces")
+    if col is None:
+        raise ValueError(f"No tonnes/holdings/ounces column in {path_or_url}: {list(df.columns)}")
+    values = pd.to_numeric(df[col].astype(str).str.replace(",", "").str.strip(), errors="coerce")
+    dates = pd.to_datetime(df[df.columns[0]].astype(str).str.strip(), errors="coerce", format="mixed")
+    s = pd.Series(values.to_numpy(), index=dates, name="etf_holdings")
+    s = s[s.index.notna()].dropna()
+    s = s[s > 0]
+    return s[~s.index.duplicated(keep="last")].sort_index()
+
+
 def load_macro_csv(path):
-    """Load a CSV with a date column plus `real_rate` and/or `dollar` columns."""
+    """Load a CSV with a date column plus any of `real_rate`, `dollar`, `etf_holdings`."""
     df = pd.read_csv(path)
     date_col = _pick(df.columns, DATE_COLUMNS) or df.columns[0]
     cols = {c.lower().strip(): c for c in df.columns}
-    wanted = [name for name in FRED_SERIES if name in cols]
+    wanted = [name for name in MACRO_COLUMNS if name in cols]
     if not wanted:
-        raise ValueError(f"{path} needs a real_rate and/or dollar column: {list(df.columns)}")
+        raise ValueError(f"{path} needs one of {', '.join(MACRO_COLUMNS)}: {list(df.columns)}")
     out = df[[cols[name] for name in wanted]].apply(pd.to_numeric, errors="coerce")
     out.columns = wanted
     out.index = pd.to_datetime(df[date_col])

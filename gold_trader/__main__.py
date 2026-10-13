@@ -5,7 +5,7 @@ import argparse
 import pandas as pd
 
 from .backtest import BacktestConfig, summarize, walk_forward
-from .data import align_macro, download_macro, download_yahoo, load_csv, load_macro_csv
+from .data import align_macro, download_macro, download_yahoo, load_csv, load_etf_holdings, load_macro_csv
 from .features import build_features
 from .model import LogisticModel
 
@@ -27,6 +27,9 @@ def main(argv=None):
     p.add_argument("--macro", choices=("fred", "none"), default="fred",
                    help="real-rate and dollar-index features: download from FRED (default) or skip")
     p.add_argument("--macro-csv", help="CSV with date, real_rate, dollar columns (instead of FRED)")
+    p.add_argument("--etf", choices=("gld", "none"), default="gld",
+                   help="ETF-flow features from SPDR GLD holdings (default) or skip")
+    p.add_argument("--etf-csv", help="CSV of ETF gold holdings (date + tonnes/holdings column)")
     p.add_argument("--macro-lag", type=int, default=BacktestConfig.macro_lag,
                    help="bars to delay macro data, for publication lag")
     p.add_argument("--out", help="write per-bar results to this CSV")
@@ -43,6 +46,18 @@ def main(argv=None):
         except Exception as e:
             p.error(f"could not download FRED data ({e}); use --macro-csv FILE or --macro none")
 
+    holdings = None
+    if args.etf_csv:
+        holdings = load_etf_holdings(args.etf_csv)
+    elif args.etf == "gld" and not (macro is not None and "etf_holdings" in macro):
+        try:
+            holdings = load_etf_holdings()
+        except Exception as e:
+            p.error(f"could not download GLD holdings ({e}); use --etf-csv FILE or --etf none")
+    if holdings is not None:
+        macro = holdings.to_frame() if macro is None else (
+            macro.drop(columns="etf_holdings", errors="ignore").join(holdings, how="outer"))
+
     cfg = BacktestConfig(
         min_train=args.min_train,
         retrain_every=args.retrain_every,
@@ -57,7 +72,7 @@ def main(argv=None):
 
     print(f"Data: {close.index[0].date()} -> {close.index[-1].date()} ({len(close)} bars)")
     if macro is not None:
-        print(f"Macro features: {', '.join(macro.columns)} (lagged {cfg.macro_lag} bar(s))")
+        print(f"External features: {', '.join(macro.columns)} (lagged {cfg.macro_lag} bar(s))")
     print(f"Out-of-sample: {res.index[0].date()} -> {res.index[-1].date()} ({len(res)} bars)\n")
     print(summarize(res).to_string(float_format=lambda v: f"{v:,.3f}"))
 
