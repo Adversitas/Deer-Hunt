@@ -2,8 +2,10 @@
 
 import argparse
 
+import pandas as pd
+
 from .backtest import BacktestConfig, summarize, walk_forward
-from .data import download_yahoo, load_csv
+from .data import align_macro, download_macro, download_yahoo, load_csv, load_macro_csv
 from .features import build_features
 from .model import LogisticModel
 
@@ -22,11 +24,25 @@ def main(argv=None):
                    help="annualised vol target; 0 disables vol targeting")
     p.add_argument("--max-leverage", type=float, default=BacktestConfig.max_leverage)
     p.add_argument("--cost-bps", type=float, default=BacktestConfig.cost_bps)
+    p.add_argument("--macro", choices=("fred", "none"), default="fred",
+                   help="real-rate and dollar-index features: download from FRED (default) or skip")
+    p.add_argument("--macro-csv", help="CSV with date, real_rate, dollar columns (instead of FRED)")
+    p.add_argument("--macro-lag", type=int, default=BacktestConfig.macro_lag,
+                   help="bars to delay macro data, for publication lag")
     p.add_argument("--out", help="write per-bar results to this CSV")
     p.add_argument("--plot", help="save an equity curve PNG (needs matplotlib)")
     args = p.parse_args(argv)
 
     close = load_csv(args.csv) if args.csv else download_yahoo(args.ticker, start=args.start)
+    macro = None
+    if args.macro_csv:
+        macro = load_macro_csv(args.macro_csv)
+    elif args.macro == "fred":
+        try:
+            macro = download_macro(start=close.index[0] - pd.Timedelta(days=400))
+        except Exception as e:
+            p.error(f"could not download FRED data ({e}); use --macro-csv FILE or --macro none")
+
     cfg = BacktestConfig(
         min_train=args.min_train,
         retrain_every=args.retrain_every,
@@ -35,15 +51,19 @@ def main(argv=None):
         target_vol=args.target_vol or None,
         max_leverage=args.max_leverage,
         cost_bps=args.cost_bps,
+        macro_lag=args.macro_lag,
     )
-    res = walk_forward(close, cfg)
+    res = walk_forward(close, cfg, macro)
 
     print(f"Data: {close.index[0].date()} -> {close.index[-1].date()} ({len(close)} bars)")
+    if macro is not None:
+        print(f"Macro features: {', '.join(macro.columns)} (lagged {cfg.macro_lag} bar(s))")
     print(f"Out-of-sample: {res.index[0].date()} -> {res.index[-1].date()} ({len(res)} bars)\n")
     print(summarize(res).to_string(float_format=lambda v: f"{v:,.3f}"))
 
     # Signal for the next bar, from a model fit on everything known today.
-    X, y, _ = build_features(close)
+    aligned = None if macro is None else align_macro(macro, close.index, cfg.macro_lag)
+    X, y, _ = build_features(close, aligned)
     X = X.dropna()
     known = y.loc[X.index].notna().to_numpy()
     model = LogisticModel(l2=cfg.l2).fit(X[known], y.loc[X.index][known])

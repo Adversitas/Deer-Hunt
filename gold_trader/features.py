@@ -12,8 +12,11 @@ def _rsi(close, window):
     return (100 - 100 / (1 + rs)).fillna(100)
 
 
-def build_features(close, horizons=(1, 5, 10, 20, 60), vol_window=20):
+def build_features(close, macro=None, horizons=(1, 5, 10, 20, 60), vol_window=20):
     """Return (features, target, forward_return).
+
+    `macro` is an optional DataFrame already aligned to `close.index` (see
+    data.align_macro) with `real_rate` and/or `dollar` columns.
 
     target[t] is 1 when the close rises from t to t+1, else 0. forward_return[t]
     is that log return; both are NaN on the last bar.
@@ -40,7 +43,32 @@ def build_features(close, horizons=(1, 5, 10, 20, 60), vol_window=20):
     lo = close.rolling(60).min()
     feats["range_pos_60"] = (close - lo) / (hi - lo).replace(0, np.nan) - 0.5
 
+    if macro is not None:
+        feats.update(_macro_features(macro, ret))
+
     X = pd.DataFrame(feats, index=close.index)
     fwd = ret.shift(-1).rename("fwd_ret")
     y = (fwd > 0).astype(float).where(fwd.notna()).rename("target")
     return X, y, fwd
+
+
+def _macro_features(macro, gold_ret, horizons=(5, 20, 60)):
+    feats = {}
+    if "real_rate" in macro:
+        # Gold pays no yield, so rising real rates raise the cost of holding it.
+        rr = macro["real_rate"]
+        feats["real_rate"] = rr
+        for h in horizons:
+            feats[f"real_rate_chg_{h}"] = rr.diff(h)
+        feats["real_rate_z_250"] = (rr - rr.rolling(250, min_periods=60).mean()) / rr.rolling(
+            250, min_periods=60
+        ).std()
+    if "dollar" in macro:
+        # Gold is priced in dollars, so a stronger dollar tends to weigh on it.
+        log_usd = np.log(macro["dollar"])
+        for h in horizons:
+            feats[f"dollar_mom_{h}"] = log_usd.diff(h)
+        feats["dollar_dist_ma_50"] = log_usd - log_usd.rolling(50).mean()
+        # How tightly gold has been trading against the dollar lately.
+        feats["gold_dollar_corr_60"] = gold_ret.rolling(60).corr(log_usd.diff())
+    return feats

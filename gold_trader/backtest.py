@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
-from .data import periods_per_year
+from .data import align_macro, periods_per_year
 from .features import build_features
 from .model import LogisticModel
 
@@ -21,11 +21,18 @@ class BacktestConfig:
     max_leverage: float = 1.0
     cost_bps: float = 2.0         # cost per unit of turnover, in basis points
     l2: float = 0.01
+    macro_lag: int = 1            # bars to delay macro data (publication lag)
 
 
-def walk_forward(close, cfg=BacktestConfig()):
-    """Return a DataFrame with probability, position and strategy returns per bar."""
-    X, y, fwd = build_features(close)
+def walk_forward(close, cfg=BacktestConfig(), macro=None):
+    """Return a DataFrame with probability, position and strategy returns per bar.
+
+    `macro` is an optional raw DataFrame (real_rate / dollar columns, any dates);
+    it is aligned to the gold bars and lagged by cfg.macro_lag here.
+    """
+    if macro is not None:
+        macro = align_macro(macro, close.index, cfg.macro_lag)
+    X, y, fwd = build_features(close, macro)
     valid = X.notna().all(axis=1)
     X, y, fwd = X[valid], y[valid], fwd[valid]
     n = len(X)
